@@ -26,7 +26,6 @@ Todos los mensajes se intercambian en formato JSON con codificación UTF-8.
 
 - Todos los valores numéricos usan `double` o `int`
 - Los timestamps de samples (`t`) están en milisegundos desde el inicio del control
-- El `session_id` es un string único generado por el ESP32 para cada sesión
 
 ---
 
@@ -39,28 +38,26 @@ Envía la configuración de los controladores (PID, IMC, RST) al ESP32.
 ```json
 {
   "type": "config_sync",
-  "payload": {
-    "pid": {
-      "kp": 1.5,
-      "ki": 0.5,
-      "kd": 0.2,
-      "setpoint": 50.0
-    },
-    "imc": {
-      "K": 1.0,
-      "tau": 2.0,
-      "theta": 0.5,
-      "lambda": 1.0
-    },
-    "rst": {
-      "R": [1.0, -0.5, 0.1],
-      "S": [1.0, 0.3, -0.1],
-      "T": [1.0, -0.5, 0.1],
-      "A": [1.0, -0.8, 0.2],
-      "B": [1.0, 0.5],
-      "P": [1.0, -0.5, 0.1],
-      "integrator": true
-    }
+  "pid": {
+    "kp": 1.5,
+    "ki": 0.5,
+    "kd": 0.2,
+    "setpoint": 50.0
+  },
+  "imc": {
+    "K": 1.0,
+    "tau": 2.0,
+    "theta": 0.5,
+    "lambda": 1.0
+  },
+  "rst": {
+    "R": [1.0, -0.5, 0.1],
+    "S": [1.0, 0.3, -0.1],
+    "T": [1.0, -0.5, 0.1],
+    "A": [1.0, -0.8, 0.2],
+    "B": [1.0, 0.5],
+    "P": [1.0, -0.5, 0.1],
+    "integrator": true
   }
 }
 ```
@@ -85,7 +82,7 @@ Envía la configuración de los controladores (PID, IMC, RST) al ESP32.
 | `rst.P` | array[double] | Coeficientes polinomio P (polos deseados) | - |
 | `rst.integrator` | boolean | Incluye integrador (1-z⁻¹) en R | true/false |
 
-**Respuesta del ESP32:**
+**Respuesta del ESP32:** (opcional, para debugging)
 
 ```json
 {
@@ -100,6 +97,8 @@ Envía la configuración de los controladores (PID, IMC, RST) al ESP32.
 | `status` | string | `"ok"` o `"error"` |
 | `error` | string | Descripción del error o `null` |
 
+> **Nota:** Este ack es opcional. Si el ESP32 no lo envía, la app continúa de todas formas.
+
 ---
 
 ### 4.2 Iniciar Control (`start_control`)
@@ -109,36 +108,40 @@ Inicia una nueva sesión de control.
 ```json
 {
   "type": "start_control",
-  "payload": {
-    "perturbation": false,
-    "duration_ms": 60000,
-    "sample_interval_ms": 1000
-  }
+  "perturbation": false,
+  "duration_ms": 60000,
+  "sample_interval_ms": 1000,
+  "pid": true,
+  "imc": false,
+  "rst": false
 }
 ```
 
-#### Campos del Payload
+#### Campos del Mensaje
 
 | Campo | Tipo | Descripción | Rango |
 |-------|------|-------------|-------|
 | `perturbation` | boolean | Si se activa perturbación durante control | true/false |
 | `duration_ms` | int | Duración máxima del control | 0 - 120000 |
 | `sample_interval_ms` | int | Intervalo de muestreo | 1000 o 2000 |
+| `pid` | boolean | Habilitar controlador PID | true/false |
+| `imc` | boolean | Habilitar controlador IMC | true/false |
+| `rst` | boolean | Habilitar controlador RST | true/false |
 
-**Respuesta del ESP32:**
+**Respuesta del ESP32:** (opcional)
 
 ```json
 {
   "type": "start_control_ack",
-  "status": "started",
-  "session_id": "abc123"
+  "status": "started"
 }
 ```
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
 | `status` | string | `"started"`, `"error"` |
-| `session_id` | string | ID único de sesión (para rastrear) |
+
+> **Nota:** Este ack es opcional. La app comienza el control aunque no reciba respuesta.
 
 ---
 
@@ -148,20 +151,11 @@ Detiene la sesión de control activa.
 
 ```json
 {
-  "type": "stop_control",
-  "payload": {
-    "session_id": "abc123"
-  }
+  "type": "stop_control"
 }
 ```
 
-#### Campos del Payload
-
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `session_id` | string | ID de sesión a detener |
-
-**Respuesta del ESP32:**
+**Respuesta del ESP32:** (opcional)
 
 ```json
 {
@@ -176,6 +170,8 @@ Detiene la sesión de control activa.
 | `status` | string | `"stopped"` o `"error"` |
 | `samples_sent` | int | Cantidad total de samples enviados |
 
+> **Nota:** Este ack es opcional. La app cierra el control aunque no reciba respuesta.
+
 ---
 
 ## 5. Mensajes de ESP32 → App
@@ -187,7 +183,6 @@ Envía un batch de samples collected during control. Se envía cada `sample_inte
 ```json
 {
   "type": "control_data",
-  "session_id": "abc123",
   "sequence": 1,
   "samples": [
     {
@@ -216,7 +211,6 @@ Envía un batch de samples collected during control. Se envía cada `sample_inte
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
-| `session_id` | string | ID de la sesión de control |
 | `sequence` | int | Número de secuencia del paquete (incrementa) |
 | `samples` | array | Array de samples colectados |
 
@@ -240,7 +234,6 @@ Envía el estado actual del control (opcional, para debugging).
 ```json
 {
   "type": "control_status",
-  "session_id": "abc123",
   "status": "running",
   "current_values": {
     "temp": 25.5,
@@ -261,7 +254,6 @@ Envía el estado actual del control (opcional, para debugging).
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
-| `session_id` | string | ID de la sesión |
 | `status` | string | `running`, `paused`, `stopped`, `error` |
 
 #### Campos de current_values
@@ -291,7 +283,6 @@ Reporta un error durante la ejecución.
 ```json
 {
   "type": "error",
-  "session_id": "abc123",
   "error_code": "SENSOR_TIMEOUT",
   "message": "Sensor de temperatura sin respuesta"
 }
@@ -299,7 +290,6 @@ Reporta un error durante la ejecución.
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
-| `session_id` | string | ID de la sesión o `null` |
 | `error_code` | string | Código de error |
 | `message` | string | Descripción legible |
 
@@ -326,23 +316,19 @@ Reporta un error durante la ejecución.
 └────┬─────┘                        └────┬─────┘
      │                                     │
      │  1. config_sync ──────────────────► │
-     │                                     │
-     │  ◄─────────────────── config_sync_ack │
+     │         (sin ack obligatorio)       │
      │                                     │
      │  2. start_control ────────────────► │
-     │                                     │
-     │  ◄─────────────────── start_control_ack │
+     │         (sin ack obligatorio)       │
      │                                     │
      │         [ Control Loop ]            │
      │                                     │
      │  ◄──────── control_data ──────────│ │
      │  ◄──────── control_data ──────────│ │
      │  ◄──────── control_data ──────────│ │
-     │  ◄──────── control_data ──────────│ │
      │                                     │
      │  3. stop_control ─────────────────► │
-     │                                     │
-     │  ◄─────────────────── stop_control_ack │
+     │         (sin ack obligatorio)      │
      │                                     │
      └──────────┘                        └──────────┘
 ```
@@ -351,14 +337,14 @@ Reporta un error durante la ejecución.
 
 ## 8. Resumen de Mensajes
 
-| Tipo | Dirección | Descripción | Respuesta |
-|------|-----------|-------------|-----------|
-| `config_sync` | App → ESP | Enviar configuración de controladores | `config_sync_ack` |
-| `start_control` | App → ESP | Iniciar sesión de control | `start_control_ack` |
-| `stop_control` | App → ESP | Detener control | `stop_control_ack` |
+| Tipo | Dirección | Descripción | Notas |
+|------|-----------|-------------|-------|
+| `config_sync` | App → ESP | Enviar configuración de controladores | Sin ack obligatorio |
+| `start_control` | App → ESP | Iniciar sesión de control | Sin ack obligatorio |
+| `stop_control` | App → ESP | Detener control | Sin ack obligatorio |
 | `control_data` | ESP → App | Batch de samples de control | - |
-| `control_status` | ESP → App | Estado actual del control | - |
-| `error` | ESP → App | Reporte de error | - |
+| `control_status` | ESP → App | Estado actual del control | Opcional, debugging |
+| `error` | ESP → App | Reporte de error | Opcional |
 
 ---
 
@@ -368,20 +354,17 @@ Reporta un error durante la ejecución.
 
 1. App se conecta al ESP32 por BLE
 2. App envía `config_sync` con parámetros de controladores
-3. ESP32 confirma con `config_sync_ack`
-4. Usuario presiona "Iniciar" en la app
-5. App envía `start_control`
-6. ESP32 responde con `start_control_ack` + `session_id`
-7. ESP32 inicia el loop de control y envía `control_data` cada `sample_interval_ms`
-8. Cuando el usuario presiona "Parar" o se alcanza `duration_ms`, app envía `stop_control`
-9. ESP32 responde con `stop_control_ack` + cantidad de samples
-10. App guarda los datos en CSV
+3. Usuario presiona "Iniciar" en la app
+4. App envía `start_control`
+5. ESP32 inicia el loop de control y envía `control_data` cada `sample_interval_ms`
+6. Cuando el usuario presiona "Parar" o se alcanza `duration_ms`, app envía `stop_control`
+7. App guarda los datos en CSV
 
 ### 9.2 Validación
 
 - El ESP32 debe validar todos los campos numéricos
-- Si un valor está fuera de rango, responder con `error` tipo `INVALID_CONFIG`
-- La app debe manejar timeouts en las respuestas
+- Si un valor está fuera de rango, ignorar o responder con `error` tipo `INVALID_CONFIG`
+- **No se requiere ack de la app** - si la conexión se pierde, el ESP32 reinicia su estado
 
 ### 9.3 Reordenamiento
 
@@ -396,6 +379,7 @@ Reporta un error durante la ejecución.
 | Versión | Fecha | Descripción |
 |---------|-------|-------------|
 | 1.0 | 2026-05-10 | Versión inicial del protocolo |
+| 1.1 | 2026-05-13 | Removido wrapper `payload`, simplificados mensajes, eliminados ACKs obligatorios, agregados flags de selección de controlador (pid/imc/rst) |
 
 ---
 
