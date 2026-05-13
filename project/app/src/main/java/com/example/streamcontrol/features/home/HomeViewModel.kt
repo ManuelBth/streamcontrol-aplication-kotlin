@@ -6,7 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.streamcontrol.core.ble.BleConnectionState
 import com.example.streamcontrol.core.ble.BleManager
 import com.example.streamcontrol.core.storage.CsvFileManager
+import com.example.streamcontrol.core.storage.GlobalConfigStorage
 import com.example.streamcontrol.domain.model.ProcessSample
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +22,8 @@ import kotlinx.serialization.json.jsonObject
 
 class HomeViewModel(
     private val bleManager: BleManager,
-    private val csvFileManager: CsvFileManager
+    private val csvFileManager: CsvFileManager,
+    private val configStorage: GlobalConfigStorage? = null
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(HomeState())
@@ -120,10 +123,33 @@ class HomeViewModel(
 
         _state.update { it.copy(controlState = ControlState.STARTING) }
 
+        var durationMs = 60000
+        var sampleIntervalMs = 1000
+        var pid = true
+        var imc = false
+        var rst = false
+
+        configStorage?.let { storage ->
+            try {
+                val config = kotlinx.coroutines.runBlocking {
+                    storage.connectionConfigFlow.first()
+                }
+                durationMs = config.maxControlDurationMs
+                sampleIntervalMs = config.sampleIntervalMs
+            } catch (e: Exception) {
+                // Use defaults
+            }
+        }
+
         val startMessage = """
             {
                 "type": "start_control",
-                "perturbation": ${_state.value.perturbationEnabled}
+                "perturbation": ${_state.value.perturbationEnabled},
+                "duration_ms": $durationMs,
+                "sample_interval_ms": $sampleIntervalMs,
+                "pid": $pid,
+                "imc": $imc,
+                "rst": $rst
             }
         """.trimIndent()
 
@@ -228,12 +254,13 @@ class HomeViewModel(
 
     class Factory(
         private val bleManager: BleManager,
-        private val csvFileManager: CsvFileManager
+        private val csvFileManager: CsvFileManager,
+        private val configStorage: GlobalConfigStorage? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(HomeViewModel::class.java)) {
-                return HomeViewModel(bleManager, csvFileManager) as T
+                return HomeViewModel(bleManager, csvFileManager, configStorage) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }
