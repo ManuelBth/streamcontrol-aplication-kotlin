@@ -17,7 +17,6 @@ data class DiscoveredDevice(
 
 data class ConfigState(
     val deviceName: String = "",
-    val pairingPin: String = "",
     val bleServiceUuid: String = "0000FFF0-0000-1000-8000-00805F9B34FB",
     val bleTxCharacteristicUuid: String = "0000FFF1-0000-1000-8000-00805F9B34FB",
     val bleRxCharacteristicUuid: String = "0000FFF2-0000-1000-8000-00805F9B34FB",

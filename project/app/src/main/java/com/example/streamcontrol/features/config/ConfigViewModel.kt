@@ -71,7 +71,6 @@ class ConfigViewModel(
             _state.update {
                 it.copy(
                     deviceName = config.deviceName,
-                    pairingPin = config.pairingPin,
                     bleServiceUuid = config.bleServiceUuid,
                     bleTxCharacteristicUuid = config.bleTxCharacteristicUuid,
                     bleRxCharacteristicUuid = config.bleRxCharacteristicUuid,
@@ -84,10 +83,6 @@ class ConfigViewModel(
 
     fun updateDeviceName(name: String) {
         _state.update { it.copy(deviceName = name) }
-    }
-
-    fun updatePairingPin(pin: String) {
-        _state.update { it.copy(pairingPin = pin) }
     }
 
     fun updateBleServiceUuid(uuid: String) {
@@ -115,7 +110,6 @@ class ConfigViewModel(
             val currentState = _state.value
             val connectionConfig = ConnectionConfig(
                 deviceName = currentState.deviceName,
-                pairingPin = currentState.pairingPin,
                 bleServiceUuid = currentState.bleServiceUuid,
                 bleTxCharacteristicUuid = currentState.bleTxCharacteristicUuid,
                 bleRxCharacteristicUuid = currentState.bleRxCharacteristicUuid,
@@ -142,8 +136,7 @@ class ConfigViewModel(
             serviceUuid = UUID.fromString(currentState.bleServiceUuid),
             txCharacteristicUuid = UUID.fromString(currentState.bleTxCharacteristicUuid),
             rxCharacteristicUuid = UUID.fromString(currentState.bleRxCharacteristicUuid),
-            deviceName = currentState.deviceName,
-            pairingPin = currentState.pairingPin
+            deviceName = currentState.deviceName
         )
 
         saveConfig()

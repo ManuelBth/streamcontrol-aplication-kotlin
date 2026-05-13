@@ -6,8 +6,7 @@ data class BleConnectionConfig(
     val serviceUuid: UUID,
     val txCharacteristicUuid: UUID,
     val rxCharacteristicUuid: UUID,
-    val deviceName: String,
-    val pairingPin: String
+    val deviceName: String
 ) {
     companion object {
         val DEFAULT_SERVICE_UUID: UUID = UUID.fromString("0000FFF0-0000-1000-8000-00805F9B34FB")
@@ -18,8 +17,7 @@ data class BleConnectionConfig(
             serviceUuid = DEFAULT_SERVICE_UUID,
             txCharacteristicUuid = DEFAULT_TX_CHAR_UUID,
             rxCharacteristicUuid = DEFAULT_RX_CHAR_UUID,
-            deviceName = "",
-            pairingPin = ""
+            deviceName = ""
         )
     }
 }

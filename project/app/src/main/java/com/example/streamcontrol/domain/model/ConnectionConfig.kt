@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ConnectionConfig(
     val deviceName: String,
-    val pairingPin: String,
     val bleServiceUuid: String,
     val bleTxCharacteristicUuid: String,
     val bleRxCharacteristicUuid: String,
@@ -24,7 +23,6 @@ data class ConnectionConfig(
 
         fun default() = ConnectionConfig(
             deviceName = "",
-            pairingPin = "",
             bleServiceUuid = DEFAULT_SERVICE_UUID,
             bleTxCharacteristicUuid = DEFAULT_TX_CHAR_UUID,
             bleRxCharacteristicUuid = DEFAULT_RX_CHAR_UUID,
