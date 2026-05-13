@@ -38,6 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType.Companion.Text
 import androidx.compose.ui.unit.dp
 import com.example.streamcontrol.ui.components.StreamControlButton
 import com.example.streamcontrol.ui.components.StreamControlDropdown
@@ -82,17 +84,8 @@ fun ConfigScreen(
                     value = state.deviceName,
                     onValueChange = viewModel::updateDeviceName,
                     label = "Dispositivo",
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
-            item {
-                StreamControlTextField(
-                    value = state.pairingPin,
-                    onValueChange = viewModel::updatePairingPin,
-                    label = "PIN",
                     modifier = Modifier.fillMaxWidth(),
-                    keyboardType = KeyboardType.Number
+                    keyboardType = Text
                 )
             }
 
