@@ -5,6 +5,7 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.ui.graphics.vector.ImageVector
 
 sealed class Screen(
@@ -35,11 +36,18 @@ sealed class Screen(
         title = "Config",
         icon = Icons.Filled.Bluetooth
     )
+
+    data object Vista : Screen(
+        route = "vista",
+        title = "Vista",
+        icon = Icons.Filled.Timeline
+    )
 }
 
 val bottomNavItems = listOf(
     Screen.Home,
     Screen.Control,
+    Screen.Vista,
     Screen.Files,
     Screen.Config
 )

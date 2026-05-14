@@ -30,6 +30,8 @@ import com.example.streamcontrol.features.files.FilesScreen
 import com.example.streamcontrol.features.files.FilesViewModel
 import com.example.streamcontrol.features.home.HomeScreen
 import com.example.streamcontrol.features.home.HomeViewModel
+import com.example.streamcontrol.features.vista.VistaScreen
+import com.example.streamcontrol.features.vista.VistaViewModel
 
 @Composable
 fun StreamControlNavigation() {
@@ -53,6 +55,7 @@ fun StreamControlNavigation() {
     val filesViewModel = remember {
         FilesViewModel.Factory(csvFileManager).create(FilesViewModel::class.java)
     }
+    val vistaViewModel = remember { VistaViewModel() }
 
     Scaffold(
         bottomBar = {
@@ -100,6 +103,7 @@ fun StreamControlNavigation() {
             composable(Screen.Home.route) { HomeScreen(viewModel = homeViewModel) }
             composable(Screen.Control.route) { ControlScreen(viewModel = controlViewModel) }
             composable(Screen.Files.route) { FilesScreen(viewModel = filesViewModel) }
+            composable(Screen.Vista.route) { VistaScreen(viewModel = vistaViewModel) }
             composable(Screen.Config.route) { ConfigScreen(viewModel = configViewModel) }
         }
     }
