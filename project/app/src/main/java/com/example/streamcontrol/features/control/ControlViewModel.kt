@@ -1,11 +1,13 @@
 package com.example.streamcontrol.features.control
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.streamcontrol.core.ble.BleConnectionState
 import com.example.streamcontrol.core.ble.BleManager
 import com.example.streamcontrol.core.storage.GlobalConfigStorage
+import com.example.streamcontrol.domain.model.ConnectionConfig
 import com.example.streamcontrol.domain.model.Controllers
 import com.example.streamcontrol.domain.model.ImcSettings
 import com.example.streamcontrol.domain.model.PidSettings
@@ -36,13 +38,48 @@ class ControlViewModel(
 
     private fun loadSavedConfig() {
         viewModelScope.launch {
-            val config = configStorage.controlConfigFlow.first()
-            _state.update {
-                it.copy(
-                    pidSettings = config.controllers.pid,
-                    imcSettings = config.controllers.imc,
-                    rstSettings = config.controllers.rst
-                )
+            try {
+                val config = configStorage.controlConfigFlow.first()
+                val connectionConfig = configStorage.connectionConfigFlow.first()
+
+                // Validate and sanitize loaded PID values
+                val safePid = try {
+                    val p = config.controllers.pid
+                    PidSettings(
+                        proportionalGain = p.proportionalGain.coerceIn(0.0, 100.0),
+                        integralTime = p.integralTime.coerceIn(0.0, 100.0),
+                        derivativeTime = p.derivativeTime.coerceIn(0.0, 100.0),
+                        setpoint = p.setpoint.coerceIn(0.0, 120.0)
+                    )
+                } catch (e: Exception) {
+                    PidSettings.default()
+                }
+
+                // Validate and sanitize loaded IMC values
+                val safeImc = try {
+                    val i = config.controllers.imc
+                    ImcSettings(
+                        processGain = i.processGain.coerceIn(0.001, Double.MAX_VALUE),
+                        timeConstant = i.timeConstant.coerceIn(0.001, Double.MAX_VALUE),
+                        deadTime = i.deadTime.coerceIn(0.0, Double.MAX_VALUE),
+                        lambda = i.lambda.coerceIn(0.001, Double.MAX_VALUE)
+                    )
+                } catch (e: Exception) {
+                    ImcSettings.default()
+                }
+
+                _state.update {
+                    it.copy(
+                        pidSettings = safePid,
+                        imcSettings = safeImc,
+                        rstSettings = config.controllers.rst,
+                        sampleIntervalMs = connectionConfig.sampleIntervalMs,
+                        maxControlDurationMs = connectionConfig.maxControlDurationMs
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("ControlViewModel", "Error loading config: ${e.message}", e)
+                // Use defaults on error
             }
         }
     }
@@ -50,6 +87,7 @@ class ControlViewModel(
     private fun observeBleState() {
         viewModelScope.launch {
             bleManager.connectionState.collect { bleState ->
+                Log.d("ControlViewModel", "BLE state changed to: $bleState")
                 val newConnectionState = when (bleState) {
                     is BleConnectionState.Disconnected -> ConnectionState.DISCONNECTED
                     is BleConnectionState.Connecting -> ConnectionState.CONNECTING
@@ -65,22 +103,50 @@ class ControlViewModel(
     }
 
     fun updatePidSettings(kp: String, ki: String, kd: String, setpoint: String) {
-        val newPidSettings = _state.value.pidSettings.copy(
-            proportionalGain = kp.toDoubleOrNull() ?: _state.value.pidSettings.proportionalGain,
-            integralTime = ki.toDoubleOrNull() ?: _state.value.pidSettings.integralTime,
-            derivativeTime = kd.toDoubleOrNull() ?: _state.value.pidSettings.derivativeTime,
-            setpoint = setpoint.toDoubleOrNull() ?: _state.value.pidSettings.setpoint
-        )
+        val newKp = kp.toDoubleOrNull() ?: return // Ignore if invalid number
+        val newKi = ki.toDoubleOrNull() ?: return
+        val newKd = kd.toDoubleOrNull() ?: return
+        val newSetpoint = setpoint.toDoubleOrNull() ?: return
+
+        // Validate ranges before applying
+        if (newKp !in 0.0..100.0 || newKi !in 0.0..100.0 || newKd !in 0.0..100.0 || newSetpoint !in 0.0..120.0) {
+            return // Ignore out-of-range values while typing
+        }
+
+        val newPidSettings = try {
+            PidSettings(
+                proportionalGain = newKp,
+                integralTime = newKi,
+                derivativeTime = newKd,
+                setpoint = newSetpoint
+            )
+        } catch (e: IllegalArgumentException) {
+            return // Safety net: ignore if validation fails
+        }
         _state.update { it.copy(pidSettings = newPidSettings) }
     }
 
     fun updateImcSettings(k: String, tau: String, theta: String, lambda: String) {
-        val newImcSettings = _state.value.imcSettings.copy(
-            processGain = k.toDoubleOrNull() ?: _state.value.imcSettings.processGain,
-            timeConstant = tau.toDoubleOrNull() ?: _state.value.imcSettings.timeConstant,
-            deadTime = theta.toDoubleOrNull() ?: _state.value.imcSettings.deadTime,
-            lambda = lambda.toDoubleOrNull() ?: _state.value.imcSettings.lambda
-        )
+        val newK = k.toDoubleOrNull() ?: return
+        val newTau = tau.toDoubleOrNull() ?: return
+        val newTheta = theta.toDoubleOrNull() ?: return
+        val newLambda = lambda.toDoubleOrNull() ?: return
+
+        // Validate ranges before applying
+        if (newK <= 0.0 || newTau <= 0.0 || newTheta < 0.0 || newLambda <= 0.0) {
+            return // Ignore out-of-range values while typing
+        }
+
+        val newImcSettings = try {
+            ImcSettings(
+                processGain = newK,
+                timeConstant = newTau,
+                deadTime = newTheta,
+                lambda = newLambda
+            )
+        } catch (e: IllegalArgumentException) {
+            return // Safety net: ignore if validation fails
+        }
         _state.update { it.copy(imcSettings = newImcSettings) }
     }
 
@@ -102,6 +168,14 @@ class ControlViewModel(
         }
     }
 
+    fun updateSampleInterval(interval: Int) {
+        _state.update { it.copy(sampleIntervalMs = interval) }
+    }
+
+    fun updateMaxControlDuration(duration: Int) {
+        _state.update { it.copy(maxControlDurationMs = duration.coerceIn(0, 120000)) }
+    }
+
     private fun parseCoeffs(text: String): List<Double> {
         return text.split(",", " ", ";")
             .map { it.trim() }
@@ -111,7 +185,9 @@ class ControlViewModel(
     }
 
     fun saveAndSync() {
+        Log.d("ControlViewModel", "saveAndSync() called, connectionState: ${_state.value.connectionState}")
         if (_state.value.connectionState != ConnectionState.CONNECTED) {
+            Log.e("ControlViewModel", "Not connected! State: ${_state.value.connectionState}")
             _state.update { it.copy(errorMessage = "Sin conexión a ESP32") }
             return
         }
@@ -127,8 +203,20 @@ class ControlViewModel(
                 )
                 configStorage.saveControllers(controllers)
 
+                // Save interval and duration to connection config
+                val currentConnectionConfig = configStorage.connectionConfigFlow.first()
+                configStorage.saveConnectionConfig(
+                    currentConnectionConfig.copy(
+                        sampleIntervalMs = _state.value.sampleIntervalMs,
+                        maxControlDurationMs = _state.value.maxControlDurationMs
+                    )
+                )
+
                 val syncMessage = buildConfigSyncMessage()
+                Log.d("ControlViewModel", "Built sync message (${syncMessage.length} bytes): $syncMessage")
+
                 bleManager.sendData(syncMessage)
+                Log.d("ControlViewModel", "sendData() called on bleManager")
 
                 _state.update {
                     it.copy(
@@ -138,6 +226,7 @@ class ControlViewModel(
                     )
                 }
             } catch (e: Exception) {
+                Log.e("ControlViewModel", "Error during sync: ${e.message}", e)
                 _state.update {
                     it.copy(
                         isSaving = false,

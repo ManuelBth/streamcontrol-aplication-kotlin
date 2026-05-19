@@ -8,6 +8,8 @@ data class ControlState(
     val pidSettings: PidSettings = PidSettings.default(),
     val imcSettings: ImcSettings = ImcSettings.default(),
     val rstSettings: RstSettings = RstSettings.default(),
+    val sampleIntervalMs: Int = 1000,
+    val maxControlDurationMs: Int = 60000,
     val isSaving: Boolean = false,
     val isSyncing: Boolean = false,
     val syncSuccess: Boolean = false,
