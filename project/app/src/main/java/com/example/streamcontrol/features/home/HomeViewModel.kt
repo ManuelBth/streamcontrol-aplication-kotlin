@@ -1,5 +1,6 @@
 package com.example.streamcontrol.features.home
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -7,6 +8,7 @@ import com.example.streamcontrol.core.ble.BleConnectionState
 import com.example.streamcontrol.core.ble.BleManager
 import com.example.streamcontrol.core.storage.CsvFileManager
 import com.example.streamcontrol.core.storage.GlobalConfigStorage
+import com.example.streamcontrol.domain.model.ControllerType
 import com.example.streamcontrol.domain.model.ProcessSample
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
@@ -17,8 +19,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+
+private const val TAG = "HomeViewModel"
 
 class HomeViewModel(
     private val bleManager: BleManager,
@@ -37,6 +43,26 @@ class HomeViewModel(
     init {
         observeBleConnection()
         observeReceivedData()
+        loadConfig()
+    }
+
+    private fun loadConfig() {
+        configStorage?.let { storage ->
+            viewModelScope.launch {
+                try {
+                    val config = storage.connectionConfigFlow.first()
+                    _state.update {
+                        it.copy(
+                            activeController = config.activeController,
+                            sampleIntervalMs = config.sampleIntervalMs,
+                            maxControlDurationMs = config.maxControlDurationMs
+                        )
+                    }
+                } catch (e: Exception) {
+                    // Use defaults
+                }
+            }
+        }
     }
 
     private fun observeBleConnection() {
@@ -63,7 +89,9 @@ class HomeViewModel(
 
     private fun observeReceivedData() {
         viewModelScope.launch {
+            Log.d(TAG, "Starting to observe received data")
             bleManager.receivedData.collect { data ->
+                Log.d(TAG, "Received data: ${data?.take(100)}")
                 data?.let { jsonString ->
                     parseAndAddSamples(jsonString)
                     bleManager.clearReceivedData()
@@ -74,35 +102,46 @@ class HomeViewModel(
 
     private fun parseAndAddSamples(jsonString: String) {
         try {
+            Log.d(TAG, "Parsing JSON: ${jsonString.take(100)}")
             val jsonElement = json.parseToJsonElement(jsonString)
             val jsonObject = jsonElement.jsonObject
 
             val typeValue = jsonObject.getValue("type")
-            if (typeValue.toString() != "\"control_data\"") return
+            Log.d(TAG, "Message type: $typeValue")
+            if (typeValue.toString() != "\"control_data\"") {
+                Log.d(TAG, "Ignoring non-control_data message")
+                return
+            }
 
             val samplesArray = jsonObject.getValue("samples").jsonArray
+            Log.d(TAG, "Found ${samplesArray.size} samples in array")
+
             val newSamples = samplesArray.mapNotNull { element ->
                 val sample = element.jsonObject
                 val elapsedTimeStr = sample.getValue("t").toString()
+                Log.d(TAG, "DEBUG: elapsedTimeStr from ESP32 = '$elapsedTimeStr'")
                 val tempStr = sample.getValue("temp").toString()
                 val angleStr = sample.getValue("angle").toString()
                 val pwmStr = sample.getValue("pwm").toString()
 
-                val elapsedTime = elapsedTimeStr.toDoubleOrNull() ?: return@mapNotNull null
-                val temperature = tempStr.toDoubleOrNull() ?: return@mapNotNull null
-                val firingAngle = angleStr.toDoubleOrNull() ?: return@mapNotNull null
-                val fanPwm = pwmStr.toIntOrNull() ?: return@mapNotNull null
+                val elapsedTime = elapsedTimeStr.toDoubleOrNull() ?: return@mapNotNull null.also { Log.w(TAG, "Failed to parse t: $elapsedTimeStr") }
+                val temperature = tempStr.toDoubleOrNull() ?: return@mapNotNull null.also { Log.w(TAG, "Failed to parse temp: $tempStr") }
+                val firingAngle = angleStr.toDoubleOrNull() ?: return@mapNotNull null.also { Log.w(TAG, "Failed to parse angle: $angleStr") }
+                val fanPwm = pwmStr.toDoubleOrNull() ?: return@mapNotNull null.also { Log.w(TAG, "Failed to parse pwm: $pwmStr") }
 
                 ProcessSample(
                     elapsedTimeMs = elapsedTime,
                     temperature = temperature,
                     firingAngle = firingAngle,
-                    fanPwm = fanPwm
+                    fanPwm = fanPwm.toInt()
                 )
             }
 
+            Log.d(TAG, "Parsed ${newSamples.size} samples successfully")
+
             _state.update { currentState ->
                 val updatedBuffer = (currentState.dataBuffer + newSamples).takeLast(2400)
+                Log.d(TAG, "Buffer size: ${updatedBuffer.size}")
                 currentState.copy(
                     dataBuffer = updatedBuffer,
                     elapsedTimeMs = if (updatedBuffer.isNotEmpty()) {
@@ -111,6 +150,7 @@ class HomeViewModel(
                 )
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Error parsing samples: ${e.message}", e)
             // Ignore malformed JSON
         }
     }
@@ -123,23 +163,13 @@ class HomeViewModel(
 
         _state.update { it.copy(controlState = ControlState.STARTING) }
 
-        var durationMs = 60000
-        var sampleIntervalMs = 1000
-        var pid = true
-        var imc = false
-        var rst = false
+        val activeController = _state.value.activeController
+        val durationMs = _state.value.maxControlDurationMs
+        val sampleIntervalMs = _state.value.sampleIntervalMs
 
-        configStorage?.let { storage ->
-            try {
-                val config = kotlinx.coroutines.runBlocking {
-                    storage.connectionConfigFlow.first()
-                }
-                durationMs = config.maxControlDurationMs
-                sampleIntervalMs = config.sampleIntervalMs
-            } catch (e: Exception) {
-                // Use defaults
-            }
-        }
+        val pid = activeController == ControllerType.PID
+        val imc = activeController == ControllerType.IMC
+        val rst = activeController == ControllerType.RST
 
         val startMessage = """
             {
@@ -207,10 +237,27 @@ class HomeViewModel(
 
     fun togglePerturbation(enabled: Boolean) {
         _state.update { it.copy(perturbationEnabled = enabled) }
+        val message = """{"type":"perturbation","pertur":$enabled}"""
+        bleManager.sendData(message)
     }
 
     fun selectVariable(variable: GraphVariable) {
         _state.update { it.copy(selectedVariable = variable) }
+    }
+
+    fun setActiveController(controller: ControllerType) {
+        _state.update { it.copy(activeController = controller) }
+        // Persist to storage
+        configStorage?.let { storage ->
+            viewModelScope.launch {
+                try {
+                    val currentConfig = storage.connectionConfigFlow.first()
+                    storage.saveConnectionConfig(currentConfig.copy(activeController = controller))
+                } catch (e: Exception) {
+                    // Ignore persistence errors
+                }
+            }
+        }
     }
 
     fun showSaveDialog() {
