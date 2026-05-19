@@ -1,5 +1,6 @@
 package com.example.streamcontrol.features.home
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,11 +16,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -37,12 +42,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.streamcontrol.domain.model.ControllerType
 import com.example.streamcontrol.domain.model.ProcessSample
-import com.example.streamcontrol.ui.components.StreamControlButton
 import com.example.streamcontrol.ui.components.StreamControlCheckbox
 import com.example.streamcontrol.ui.components.StreamControlDropdown
+import kotlin.math.max
+
+private const val TAG = "HomeScreen"
 
 @Composable
 fun HomeScreen(
@@ -76,37 +91,45 @@ fun HomeScreen(
                 onStopClick = { viewModel.stopControl() }
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             GraphArea(
                 dataBuffer = state.dataBuffer,
                 selectedVariable = state.selectedVariable,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.6f)
+                    .weight(1f)
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            VariableSelector(
-                selectedVariable = state.selectedVariable,
-                onVariableSelected = { viewModel.selectVariable(it) }
-            )
+            // Variable + Controller in one row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                VariableSelector(
+                    selectedVariable = state.selectedVariable,
+                    onVariableSelected = { viewModel.selectVariable(it) },
+                    modifier = Modifier.weight(1f)
+                )
 
-            Spacer(modifier = Modifier.height(8.dp))
+                ControllerSelector(
+                    activeController = state.activeController,
+                    onControllerSelected = { viewModel.setActiveController(it) },
+                    enabled = !state.isRunning,
+                    modifier = Modifier.weight(1f)
+                )
+            }
 
-            StreamControlCheckbox(
-                label = "Perturbación",
-                checked = state.perturbationEnabled,
-                onCheckedChange = { viewModel.togglePerturbation(it) },
-                enabled = !state.isRunning
-            )
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            BottomButtons(
+            // Bottom buttons with icons
+            ActionButtonsRow(
                 isRunning = state.isRunning,
                 hasData = state.dataBuffer.isNotEmpty(),
+                perturbationEnabled = state.perturbationEnabled,
+                onTogglePerturbation = { viewModel.togglePerturbation(it) },
                 onStartClick = { viewModel.startControl() },
                 onStopClick = { viewModel.stopControl() },
                 onSaveClick = { viewModel.showSaveDialog() }
@@ -212,7 +235,7 @@ private fun GraphArea(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
                 shape = MaterialTheme.shapes.medium
             )
-            .padding(8.dp)
+            .padding(12.dp)
     ) {
         if (dataBuffer.isEmpty()) {
             Text(
@@ -222,118 +245,241 @@ private fun GraphArea(
                 modifier = Modifier.align(Alignment.Center)
             )
         } else {
-            val chartData = getChartData(dataBuffer, selectedVariable)
-            val yRange = getYRange(selectedVariable)
-
-            Chart(
-                data = chartData,
-                yRange = yRange,
+            val chartConfig = getChartConfig(selectedVariable)
+            ProfessionalChart(
+                dataBuffer = dataBuffer,
+                selectedVariable = selectedVariable,
+                config = chartConfig,
                 modifier = Modifier.fillMaxSize()
             )
         }
     }
 }
 
+private data class ChartConfig(
+    val yMin: Float,
+    val yMax: Float,
+    val yLabel: String,
+    val lineColor: Color,
+    val unit: String
+)
+
+private fun getChartConfig(variable: GraphVariable): ChartConfig {
+    return when (variable) {
+        GraphVariable.TEMPERATURE -> ChartConfig(0f, 100f, "Temperatura", Color(0xFFE53935), "°C")
+        GraphVariable.FIRING_ANGLE -> ChartConfig(0f, 90f, "Ángulo disparo", Color(0xFF1E88E5), "°")
+        GraphVariable.FAN_PWM -> ChartConfig(0f, 255f, "PWM", Color(0xFF43A047), "%")
+    }
+}
+
 @Composable
-private fun Chart(
-    data: List<Pair<Float, Float>>,
-    yRange: ClosedFloatingPointRange<Float>,
+private fun ProfessionalChart(
+    dataBuffer: List<ProcessSample>,
+    selectedVariable: GraphVariable,
+    config: ChartConfig,
     modifier: Modifier = Modifier
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val gridColor = Color.Gray.copy(alpha = 0.3f)
 
-    androidx.compose.foundation.Canvas(modifier = modifier) {
-        if (data.isEmpty()) return@Canvas
+    val leftMargin = 55.dp
+    val bottomMargin = 40.dp
+    val topMargin = 20.dp
+    val rightMargin = 20.dp
 
-        val minX = data.minOf { it.first }
-        val maxX = data.maxOf { it.first }
-        val xRange = if (maxX - minX > 0) maxX - minX else 1f
-        val yMin = yRange.start
-        val yMax = yRange.endInclusive
-        val yRangeSpan = yMax - yMin
+    val density = LocalDensity.current
 
-        val paddingX = 40f
-        val paddingY = 30f
-        val chartWidth = size.width - paddingX * 2
-        val chartHeight = size.height - paddingY * 2
+    Canvas(modifier = modifier) {
+        val chartLeft = with(density) { leftMargin.toPx() }
+        val chartRight = size.width - with(density) { rightMargin.toPx() }
+        val chartTop = with(density) { topMargin.toPx() }
+        val chartBottom = size.height - with(density) { bottomMargin.toPx() }
+        val chartWidth = chartRight - chartLeft
+        val chartHeight = chartBottom - chartTop
 
-        drawLine(
-            color = Color.Gray.copy(alpha = 0.3f),
-            start = androidx.compose.ui.geometry.Offset(paddingX, paddingY),
-            end = androidx.compose.ui.geometry.Offset(paddingX, size.height - paddingY),
-            strokeWidth = 1f
-        )
-        drawLine(
-            color = Color.Gray.copy(alpha = 0.3f),
-            start = androidx.compose.ui.geometry.Offset(paddingX, size.height - paddingY),
-            end = androidx.compose.ui.geometry.Offset(size.width - paddingX, size.height - paddingY),
-            strokeWidth = 1f
-        )
+        if (chartWidth <= 0 || chartHeight <= 0 || dataBuffer.isEmpty()) return@Canvas
 
-        val gridLines = 5
-        for (i in 0..gridLines) {
-            val y = paddingY + (chartHeight * i / gridLines)
+        val dataPoints = dataBuffer.map { sample ->
+            val value = when (selectedVariable) {
+                GraphVariable.TEMPERATURE -> sample.temperature.toFloat()
+                GraphVariable.FIRING_ANGLE -> sample.firingAngle.toFloat()
+                GraphVariable.FAN_PWM -> sample.fanPwm.toFloat()
+            }
+            sample.elapsedTimeMs.toFloat() to value
+        }
+
+        val minTime = dataPoints.minOf { it.first }
+        val maxTime = dataPoints.maxOf { it.first }
+        val timeRange = max(maxTime - minTime, 1f)
+        val yRange = config.yMax - config.yMin
+
+        // Draw grid lines
+        val ySteps = 5
+        for (i in 0..ySteps) {
+            val y = chartBottom - (chartHeight * i / ySteps)
             drawLine(
-                color = Color.Gray.copy(alpha = 0.2f),
-                start = androidx.compose.ui.geometry.Offset(paddingX, y),
-                end = androidx.compose.ui.geometry.Offset(size.width - paddingX, y),
+                color = gridColor,
+                start = Offset(chartLeft, y),
+                end = Offset(chartRight, y),
                 strokeWidth = 1f
             )
-        }
-
-        if (data.size > 1) {
-            for (i in 0 until data.size - 1) {
-                val x1 = paddingX + ((data[i].first - minX) / xRange) * chartWidth
-                val y1 = paddingY + chartHeight - ((data[i].second - yMin) / yRangeSpan) * chartHeight
-                val x2 = paddingX + ((data[i + 1].first - minX) / xRange) * chartWidth
-                val y2 = paddingY + chartHeight - ((data[i + 1].second - yMin) / yRangeSpan) * chartHeight
-
-                drawLine(
-                    color = primaryColor,
-                    start = androidx.compose.ui.geometry.Offset(x1, y1),
-                    end = androidx.compose.ui.geometry.Offset(x2, y2),
-                    strokeWidth = 2f
-                )
+            val yValue = config.yMin + (yRange * i / ySteps)
+            val label = if (config.unit == "%") {
+                "${yValue.toInt()}"
+            } else {
+                String.format("%.1f", yValue)
             }
-
-            val lastPoint = data.last()
-            val lastX = paddingX + ((lastPoint.first - minX) / xRange) * chartWidth
-            val lastY = paddingY + chartHeight - ((lastPoint.second - yMin) / yRangeSpan) * chartHeight
-
-            drawCircle(
-                color = primaryColor,
-                radius = 4f,
-                center = androidx.compose.ui.geometry.Offset(lastX, lastY)
+            drawContext.canvas.nativeCanvas.drawText(
+                label,
+                chartLeft - 8,
+                y + 4,
+                android.graphics.Paint().apply {
+                    color = textColor.hashCode()
+                    textSize = with(density) { 10.sp.toPx() }
+                    textAlign = android.graphics.Paint.Align.RIGHT
+                }
             )
         }
-    }
-}
 
-private fun getChartData(data: List<ProcessSample>, variable: GraphVariable): List<Pair<Float, Float>> {
-    return data.map { sample ->
-        val value = when (variable) {
-            GraphVariable.TEMPERATURE -> sample.temperature.toFloat()
-            GraphVariable.FIRING_ANGLE -> sample.firingAngle.toFloat()
-            GraphVariable.FAN_PWM -> sample.fanPwm.toFloat()
+        // X-axis labels
+        val xSteps = 5
+        for (i in 0..xSteps) {
+            val x = chartLeft + (chartWidth * i / xSteps)
+            val timeValue = minTime + (timeRange * i / xSteps)
+            val timeSeconds = timeValue / 1000f
+            val label = "${timeSeconds.toInt()}s"
+            drawContext.canvas.nativeCanvas.drawText(
+                label,
+                x,
+                chartBottom + 20,
+                android.graphics.Paint().apply {
+                    color = textColor.hashCode()
+                    textSize = with(density) { 10.sp.toPx() }
+                    textAlign = android.graphics.Paint.Align.CENTER
+                }
+            )
         }
-        sample.elapsedTimeMs.toFloat() to value
-    }
-}
 
-private fun getYRange(variable: GraphVariable): ClosedFloatingPointRange<Float> {
-    return when (variable) {
-        GraphVariable.TEMPERATURE -> 0f..180f
-        GraphVariable.FIRING_ANGLE -> 0f..180f
-        GraphVariable.FAN_PWM -> 0f..255f
+        // Y-axis title
+        drawContext.canvas.nativeCanvas.save()
+        drawContext.canvas.nativeCanvas.rotate(-90f, 15f, size.height / 2)
+        drawContext.canvas.nativeCanvas.drawText(
+            "${config.yLabel} (${config.unit})",
+            15f,
+            size.height / 2,
+            android.graphics.Paint().apply {
+                color = textColor.hashCode()
+                textSize = with(density) { 11.sp.toPx() }
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+        )
+        drawContext.canvas.nativeCanvas.restore()
+
+        // X-axis title
+        drawContext.canvas.nativeCanvas.drawText(
+            "Tiempo",
+            chartLeft + chartWidth / 2,
+            size.height - 5,
+            android.graphics.Paint().apply {
+                color = textColor.hashCode()
+                textSize = with(density) { 11.sp.toPx() }
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+        )
+
+        // Draw axes
+        drawLine(
+            color = textColor,
+            start = Offset(chartLeft, chartTop),
+            end = Offset(chartLeft, chartBottom),
+            strokeWidth = 2f
+        )
+        drawLine(
+            color = textColor,
+            start = Offset(chartLeft, chartBottom),
+            end = Offset(chartRight, chartBottom),
+            strokeWidth = 2f
+        )
+
+        // Draw data line
+        if (dataPoints.size > 1) {
+            val path = Path()
+            var first = true
+
+            dataPoints.forEachIndexed { index, (time, value) ->
+                val x = chartLeft + ((time - minTime) / timeRange) * chartWidth
+                val y = chartBottom - ((value - config.yMin) / yRange) * chartHeight
+
+                if (first) {
+                    path.moveTo(x, y)
+                    first = false
+                } else {
+                    path.lineTo(x, y)
+                }
+
+                if (index == dataPoints.lastIndex) {
+                    drawCircle(
+                        color = config.lineColor,
+                        radius = 4.dp.toPx(),
+                        center = Offset(x, y)
+                    )
+                }
+            }
+
+            drawPath(
+                path = path,
+                color = config.lineColor,
+                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+            )
+        } else if (dataPoints.size == 1) {
+            val x = chartLeft + chartWidth / 2
+            val y = chartBottom - ((dataPoints[0].second - config.yMin) / yRange) * chartHeight
+            drawCircle(
+                color = config.lineColor,
+                radius = 4.dp.toPx(),
+                center = Offset(x, y)
+            )
+        }
+
+        // Draw legend
+        val legendBoxLeft = chartRight - 100.dp.toPx()
+        val legendBoxTop = chartTop + 5.dp.toPx()
+        val legendBoxWidth = 95.dp.toPx()
+        val legendBoxHeight = 25.dp.toPx()
+
+        drawRoundRect(
+            color = Color.Black.copy(alpha = 0.6f),
+            topLeft = Offset(legendBoxLeft, legendBoxTop),
+            size = androidx.compose.ui.geometry.Size(legendBoxWidth, legendBoxHeight),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())
+        )
+
+        drawCircle(
+            color = config.lineColor,
+            radius = 5.dp.toPx(),
+            center = Offset(legendBoxLeft + 15.dp.toPx(), legendBoxTop + legendBoxHeight / 2)
+        )
+
+        drawContext.canvas.nativeCanvas.drawText(
+            config.yLabel,
+            legendBoxLeft + 28.dp.toPx(),
+            legendBoxTop + legendBoxHeight / 2 + 4.dp.toPx(),
+            android.graphics.Paint().apply {
+                color = android.graphics.Color.WHITE
+                textSize = with(density) { 10.sp.toPx() }
+                textAlign = android.graphics.Paint.Align.LEFT
+            }
+        )
     }
 }
 
 @Composable
 private fun VariableSelector(
     selectedVariable: GraphVariable,
-    onVariableSelected: (GraphVariable) -> Unit
+    onVariableSelected: (GraphVariable) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val options = listOf("Temperatura", "Ángulo disparo", "PWM")
+    val options = listOf("Temperatura", "Ángulo", "PWM")
     val selectedIndex = when (selectedVariable) {
         GraphVariable.TEMPERATURE -> 0
         GraphVariable.FIRING_ANGLE -> 1
@@ -356,52 +502,116 @@ private fun VariableSelector(
                 )
             }
         },
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier
     )
 }
 
 @Composable
-private fun BottomButtons(
+private fun ControllerSelector(
+    activeController: ControllerType,
+    onControllerSelected: (ControllerType) -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val options = ControllerType.entries.map { it.name }
+    val selectedIndex = ControllerType.entries.indexOf(activeController)
+
+    StreamControlDropdown(
+        label = "Controlador",
+        selectedValue = options[selectedIndex],
+        options = options,
+        onValueChange = { newValue ->
+            val index = options.indexOf(newValue)
+            if (index >= 0) {
+                onControllerSelected(ControllerType.entries[index])
+            }
+        },
+        enabled = enabled,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun ActionButtonsRow(
     isRunning: Boolean,
     hasData: Boolean,
+    perturbationEnabled: Boolean,
+    onTogglePerturbation: (Boolean) -> Unit,
     onStartClick: () -> Unit,
     onStopClick: () -> Unit,
     onSaveClick: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isRunning) {
-            Button(
-                onClick = onStopClick,
+        // Perturbation toggle
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            IconButton(
+                onClick = { onTogglePerturbation(!perturbationEnabled) },
                 modifier = Modifier
-                    .weight(1f)
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFF44336)
-                ),
-                shape = MaterialTheme.shapes.medium
+                    .size(48.dp)
+                    .background(
+                        color = if (perturbationEnabled) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = CircleShape
+                    )
             ) {
-                Text("PARAR")
+                Icon(
+                    imageVector = Icons.Filled.Waves,
+                    contentDescription = "Perturbación",
+                    tint = if (perturbationEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
             }
-        } else {
-            StreamControlButton(
-                text = "INICIAR",
-                onClick = onStartClick,
-                modifier = Modifier.weight(1f)
+            Text(
+                text = "Pert.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
-        OutlinedButton(
-            onClick = onSaveClick,
+        // Start/Stop button
+        Button(
+            onClick = if (isRunning) onStopClick else onStartClick,
             modifier = Modifier
                 .weight(1f)
                 .height(56.dp),
-            enabled = hasData,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isRunning) Color(0xFFF44336) else MaterialTheme.colorScheme.primary
+            ),
             shape = MaterialTheme.shapes.medium
         ) {
-            Text("GUARDAR")
+            Icon(
+                imageVector = if (isRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                contentDescription = if (isRunning) "Parar" else "Iniciar"
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(if (isRunning) "PARAR" else "INICIAR")
+        }
+
+        // Save button
+        OutlinedButton(
+            onClick = onSaveClick,
+            modifier = Modifier
+                .size(56.dp),
+            enabled = hasData,
+            shape = CircleShape,
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Save,
+                contentDescription = "Guardar"
+            )
         }
     }
 }
